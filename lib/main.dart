@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:just_audio/just_audio.dart';
@@ -31,10 +33,247 @@ class IrnavaApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const MusicHome(),
+      home: const AuthGate(),
     );
   }
 }
+
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool checking = true;
+  bool authenticated = false;
+  bool hasAccount = false;
+
+  @override
+  void initState() {
+    super.initState();
+    checkAccount();
+  }
+
+  Future<void> checkAccount() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      hasAccount = prefs.getString('irnava_account_username') != null;
+      checking = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (checking) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (authenticated) return const MusicHome();
+
+    return AuthPage(
+      hasAccount: hasAccount,
+      onAuthenticated: () {
+        setState(() => authenticated = true);
+      },
+    );
+  }
+}
+
+class AuthPage extends StatefulWidget {
+  final bool hasAccount;
+  final VoidCallback onAuthenticated;
+
+  const AuthPage({
+    super.key,
+    required this.hasAccount,
+    required this.onAuthenticated,
+  });
+
+  @override
+  State<AuthPage> createState() => _AuthPageState();
+}
+
+class _AuthPageState extends State<AuthPage> {
+  final formKey = GlobalKey<FormState>();
+  final username = TextEditingController();
+  final password = TextEditingController();
+  bool hidden = true;
+  bool loading = false;
+
+  String hashPassword(String value) {
+    return sha256.convert(utf8.encode(value)).toString();
+  }
+
+  Future<void> submit() async {
+    if (!formKey.currentState!.validate() || loading) return;
+
+    setState(() => loading = true);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final name = username.text.trim().toLowerCase();
+      final passHash = hashPassword(password.text);
+
+      final savedName = prefs.getString('irnava_account_username');
+      final savedHash = prefs.getString('irnava_account_hash');
+
+      if (savedName == null) {
+        await prefs.setString('irnava_account_username', name);
+        await prefs.setString('irnava_account_hash', passHash);
+      } else {
+        if (savedName != name || savedHash != passHash) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('نام کاربری یا رمز عبور اشتباه است'),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      widget.onAuthenticated();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('ذخیره حساب انجام نشد')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    username.dispose();
+    password.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(25),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.graphic_eq,
+                        color: purple,
+                        size: 76,
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'IRNAVA',
+                        style: TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.w900,
+                          color: purple,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        widget.hasAccount
+                            ? 'خوش برگشتی! وارد حساب خودت شو'
+                            : 'حساب کاربری ایرنوا را بساز',
+                        style: const TextStyle(
+                          color: muted,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 35),
+                      TextFormField(
+                        controller: username,
+                        textDirection: TextDirection.ltr,
+                        textAlign: TextAlign.left,
+                        decoration: const InputDecoration(
+                          labelText: 'نام کاربری',
+                          prefixIcon: Icon(Icons.person_outline),
+                          filled: true,
+                        ),
+                        validator: (v) {
+                          final value = v?.trim() ?? '';
+                          if (value.length < 3 ||
+                              !RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(value)) {
+                            return 'حداقل ۳ حرف؛ فقط انگلیسی، عدد و _';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: password,
+                        obscureText: hidden,
+                        textDirection: TextDirection.ltr,
+                        decoration: InputDecoration(
+                          labelText: 'رمز عبور',
+                          prefixIcon: const Icon(Icons.lock_outline),
+                          filled: true,
+                          suffixIcon: IconButton(
+                            onPressed: () =>
+                                setState(() => hidden = !hidden),
+                            icon: Icon(
+                              hidden
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                            ),
+                          ),
+                        ),
+                        validator: (v) => (v ?? '').length < 8
+                            ? 'رمز عبور باید حداقل ۸ کاراکتر باشد'
+                            : null,
+                      ),
+                      const SizedBox(height: 25),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 54,
+                        child: FilledButton(
+                          onPressed: loading ? null : submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: purple,
+                          ),
+                          child: loading
+                              ? const CircularProgressIndicator()
+                              : Text(
+                                  widget.hasAccount
+                                      ? 'ورود به ایرنوا'
+                                      : 'ساخت حساب',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 class Song {
   final String path;
